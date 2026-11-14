@@ -185,6 +185,20 @@ The tests run against a throwaway `HOME` with synthetic transcripts and a fake `
 
 **Screenshots for PRs.** `scripts/demo_data.py` writes a demo `HOME` of made-up sessions, so you can run any version of ccdeck on the same data: `HOME=/tmp/demo PATH=/tmp/demo/bin:$PATH python3 ccdeck serve --port 7800`. PRs that change the dashboard show it before and after on that data; `CLAUDE.md` has the details.
 
+**AI review.** Pull requests get automatic reviews from CodeRabbit (free for public repos). Its settings are in `.coderabbit.yaml`, and the rules it reviews against are in `.github/styleguide.md`. Ask for a re-review with `@coderabbitai review`.
+
+**Merging into `main`** needs all of these:
+- the CI jobs pass;
+- every review conversation is resolved, so an open comment (critical or not) blocks the merge;
+- the **AI review gate** check passes (`.github/workflows/ai-review.yml`): CodeRabbit isn't requesting changes;
+- the **CodeRabbit** check passes, which means CodeRabbit has reviewed the latest commit.
+
+One gap: when CodeRabbit is rate-limited or skips a review, its check ends neutral or skipped, and GitHub counts both as passing. Before merging, look at the CodeRabbit check on the PR's last commit; if it says skipped or rate-limited, comment `@coderabbitai review` and wait for it. The gate can't enforce this: CodeRabbit's check finishes after the gate runs and posts no review when it finds nothing, so nothing would re-run a stricter gate.
+
+The rules are in `.github/rulesets/main.json`. GitHub applies them only after they're imported once, under Settings → Rules → Rulesets → New ruleset → Import a ruleset.
+
+**What the gate is for.** It's a safety net for the maintainer's own PRs and agents' PRs, not a control against a hostile PR. The gate runs the workflow from the PR's branch, so a PR could replace it with a job that passes under the same name. That's accepted here: GitHub doesn't run workflows from a first-time contributor's fork without approval, every PR is merged by hand, and a change under `.github/workflows/` shows in the diff. If outside contributions grow, move the gate to a trusted evaluator (`pull_request_target` and `workflow_run`, which run from `main`) that sets its own commit status and fails PRs that change `.github/workflows/`.
+
 **Releasing.** Claude Code updates an installed plugin only when the `version` in `.claude-plugin/plugin.json` changes. Bump it, and `VERSION` in `ccdeck` with it, in every release; CI checks that the two match. Users then get it by running `/plugin marketplace update ccdeck` and updating ccdeck from the `/plugin` menu (or reinstalling it).
 
 ## License and affiliation
