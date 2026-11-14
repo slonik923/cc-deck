@@ -368,6 +368,52 @@ class HookTest(unittest.TestCase):
         finally:
             cc.running_claude_processes = saved
 
+    def test_peer_registry_gives_name_and_liveness(self):
+        build_fixtures()
+        reg = cc.CLAUDE_DIR / "sessions"
+        reg.mkdir(parents=True, exist_ok=True)
+        me = os.getpid()
+        (reg / f"{me}.json").write_text(json.dumps({"pid": me, "procStart": cc.proc_start_time(me),
+                                                    "sessionId": "s-closed", "name": "work-2d"}))
+        (reg / "1.json").write_text(json.dumps({"pid": 1, "procStart": "stale", "sessionId": "s-midtask", "name": "old"}))
+        try:
+            rows = by_id(cc.collect(True, 10 ** 6))
+            self.assertEqual((rows["s-closed"]["peer_name"], rows["s-closed"]["alive"]), ("work-2d", True))
+            self.assertIsNone(rows["s-midtask"]["peer_name"])  # reused pid: not that session any more
+        finally:
+            shutil.rmtree(reg)
+
+    def test_registry_record_without_start_time_is_ignored(self):
+        build_fixtures()
+        reg = cc.CLAUDE_DIR / "sessions"
+        reg.mkdir(parents=True, exist_ok=True)
+        me = os.getpid()
+        (reg / f"{me}.json").write_text(json.dumps({"pid": me, "sessionId": "s-closed", "name": "work-2d"}))
+        try:
+            self.assertEqual(cc.peer_sessions(), {})  # the pid is alive, but it may not be that session any more
+        finally:
+            shutil.rmtree(reg)
+
+    def test_resumed_elsewhere_drops_the_ended_processs_permission(self):
+        build_fixtures()
+        sid = "s-closed"
+        self.run_hook({"session_id": sid, "hook_event_name": "UserPromptSubmit", "cwd": str(WORK)})
+        self.run_hook({"session_id": sid, "hook_event_name": "Notification",
+                       "notification_type": "permission_prompt", "message": "Claude needs your permission to use Bash"})
+        state_file = cc.STATE_DIR / f"{sid}.json"
+        st = json.loads(state_file.read_text())
+        st["pid"], st["pid_start"] = 1, "gone"  # the process that asked has ended
+        state_file.write_text(json.dumps(st))
+        saved = cc.running_claude_processes
+        cc.running_claude_processes = lambda: [(2, str(WORK), ["claude", "--resume", sid])]
+        try:
+            row = by_id(cc.collect(True, 10 ** 6))[sid]
+            self.assertTrue(row["alive"])
+            self.assertNotEqual(row["state"], "permission")
+            self.assertIsNone(row["hook_message"])
+        finally:
+            cc.running_claude_processes = saved
+
     def test_bad_payloads_ignored(self):
         for p in ([1], "x", {"session_id": "../../etc"}, {}):
             self.run_hook(p)
@@ -703,6 +749,11 @@ class GuessLiveTest(unittest.TestCase):
         self.assertEqual(live, {"new", "mid"})  # 3 processes, one of them is the resumed session
         hooks = {"new": {"pid": os.getpid(), "pid_start": cc.proc_start_time(os.getpid())}}
         self.assertEqual(cc.guess_live_sessions(sessions, hooks, procs, {"resumed"}), {"mid"})
+
+    def test_registry_sessions_use_up_their_process(self):
+        # registry session A is open in /w/app; B is newer and closed: one process, so only A
+        sessions = {"A": {"id": "A", "cwd": "/w/app", "last_ts": 1}, "B": {"id": "B", "cwd": "/w/app", "last_ts": 2}}
+        self.assertEqual(cc.guess_live_sessions(sessions, {}, [(1, "/w/app", ["claude"])], {"A"}), set())
 
 
 class MacDesktopTest(unittest.TestCase):
